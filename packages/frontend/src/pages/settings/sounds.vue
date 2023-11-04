@@ -1,13 +1,18 @@
+<!--
+SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+
 <template>
 <div class="_gaps_m">
-	<MkRange v-model="masterVolume" :min="0" :max="1" :step="0.05" :text-converter="(v) => `${Math.floor(v * 100)}%`">
+	<MkRange v-model="masterVolume" :min="0" :max="1" :step="0.05" :textConverter="(v) => `${Math.floor(v * 100)}%`">
 		<template #label>{{ i18n.ts.masterVolume }}</template>
 	</MkRange>
 
 	<FormSection>
 		<template #label>{{ i18n.ts.sounds }}</template>
 		<div class="_gaps_s">
-			<MkFolder v-for="type in Object.keys(sounds)" :key="type">
+			<MkFolder v-for="type in soundsKeys" :key="type">
 				<template #label>{{ i18n.t('_sfx.' + type) }}</template>
 				<template #suffix>{{ sounds[type].type ?? i18n.ts.none }}</template>
 
@@ -21,51 +26,42 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, ref } from 'vue';
+import { Ref, computed, ref } from 'vue';
 import XSound from './sounds.sound.vue';
 import MkRange from '@/components/MkRange.vue';
 import MkButton from '@/components/MkButton.vue';
 import FormSection from '@/components/form/section.vue';
 import MkFolder from '@/components/MkFolder.vue';
-import { ColdDeviceStorage } from '@/store';
-import { i18n } from '@/i18n';
-import { definePageMetadata } from '@/scripts/page-metadata';
+import { i18n } from '@/i18n.js';
+import { definePageMetadata } from '@/scripts/page-metadata.js';
+import { defaultStore } from '@/store.js';
 
-const masterVolume = computed({
-	get: () => {
-		return ColdDeviceStorage.get('sound_masterVolume');
-	},
-	set: (value) => {
-		ColdDeviceStorage.set('sound_masterVolume', value);
-	},
+const masterVolume = computed(defaultStore.makeGetterSetter('sound_masterVolume'));
+
+const soundsKeys = ['note', 'noteMy', 'notification', 'antenna', 'channel'] as const;
+
+const sounds = ref<Record<typeof soundsKeys[number], Ref<any>>>({
+	note: defaultStore.reactiveState.sound_note,
+	noteMy: defaultStore.reactiveState.sound_noteMy,
+	notification: defaultStore.reactiveState.sound_notification,
+	antenna: defaultStore.reactiveState.sound_antenna,
+	channel: defaultStore.reactiveState.sound_channel,
 });
 
-const volumeIcon = computed(() => masterVolume.value === 0 ? 'ti ti-volume-3' : 'ti ti-volume');
-
-const sounds = ref({
-	note: ColdDeviceStorage.get('sound_note'),
-	noteMy: ColdDeviceStorage.get('sound_noteMy'),
-	notification: ColdDeviceStorage.get('sound_notification'),
-	chat: ColdDeviceStorage.get('sound_chat'),
-	chatBg: ColdDeviceStorage.get('sound_chatBg'),
-	antenna: ColdDeviceStorage.get('sound_antenna'),
-	channel: ColdDeviceStorage.get('sound_channel'),
-});
-
-async function updated(type, sound) {
+async function updated(type: keyof typeof sounds.value, sound) {
 	const v = {
 		type: sound.type,
 		volume: sound.volume,
 	};
 
-	ColdDeviceStorage.set('sound_' + type, v);
+	defaultStore.set(`sound_${type}`, v);
 	sounds.value[type] = v;
 }
 
 function reset() {
-	for (const sound of Object.keys(sounds.value)) {
-		const v = ColdDeviceStorage.default['sound_' + sound];
-		ColdDeviceStorage.set('sound_' + sound, v);
+	for (const sound of Object.keys(sounds.value) as Array<keyof typeof sounds.value>) {
+		const v = defaultStore.def[`sound_${sound}`].default;
+		defaultStore.set(`sound_${sound}`, v);
 		sounds.value[sound] = v;
 	}
 }

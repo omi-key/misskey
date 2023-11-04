@@ -1,7 +1,12 @@
+<!--
+SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+
 <template>
 <MkStickyContainer>
 	<template #header><MkPageHeader :actions="headerActions" :tabs="headerTabs"/></template>
-	<MkSpacer :content-max="900" :margin-min="20" :margin-max="32">
+	<MkSpacer :contentMax="900" :marginMin="20" :marginMax="32">
 		<div ref="el" class="vvcocwet" :class="{ wide: !narrow }">
 			<div class="body">
 				<div v-if="!narrow || currentPage?.route.name == null" class="nav">
@@ -18,22 +23,23 @@
 			</div>
 		</div>
 	</MkSpacer>
+	<MkFooterSpacer/>
 </mkstickycontainer>
 </template>
 
 <script setup lang="ts">
 import { computed, onActivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
-import { i18n } from '@/i18n';
+import { i18n } from '@/i18n.js';
 import MkInfo from '@/components/MkInfo.vue';
 import MkSuperMenu from '@/components/MkSuperMenu.vue';
-import { signout, $i } from '@/account';
-import { unisonReload } from '@/scripts/unison-reload';
-import { instance } from '@/instance';
-import { useRouter } from '@/router';
-import { definePageMetadata, provideMetadataReceiver } from '@/scripts/page-metadata';
-import * as os from '@/os';
-import { miLocalStorage } from '@/local-storage';
-import { fetchCustomEmojis } from '@/custom-emojis';
+import { signout, $i } from '@/account.js';
+import { unisonReload } from '@/scripts/unison-reload.js';
+import { instance } from '@/instance.js';
+import { useRouter } from '@/router.js';
+import { definePageMetadata, provideMetadataReceiver } from '@/scripts/page-metadata.js';
+import * as os from '@/os.js';
+import { miLocalStorage } from '@/local-storage.js';
+import { fetchCustomEmojis } from '@/custom-emojis.js';
 
 const indexInfo = {
 	title: i18n.ts.settings,
@@ -135,20 +141,10 @@ const menuDef = computed(() => [{
 		to: '/settings/roles',
 		active: currentPage?.route.name === 'roles',
 	}, {
-		icon: 'ti ti-planet-off',
-		text: i18n.ts.instanceMute,
-		to: '/settings/instance-mute',
-		active: currentPage?.route.name === 'instance-mute',
-	}, {
 		icon: 'ti ti-ban',
 		text: i18n.ts.muteAndBlock,
 		to: '/settings/mute-block',
 		active: currentPage?.route.name === 'mute-block',
-	}, {
-		icon: 'ti ti-message-off',
-		text: i18n.ts.wordMute,
-		to: '/settings/word-mute',
-		active: currentPage?.route.name === 'word-mute',
 	}, {
 		icon: 'ti ti-api',
 		text: 'API',
@@ -166,7 +162,7 @@ const menuDef = computed(() => [{
 		active: currentPage?.route.name === 'import-export',
 	}, {
 		icon: 'ti ti-plane',
-		text: i18n.ts.accountMigration,
+		text: `${i18n.ts.accountMigration}`,
 		to: '/settings/migration',
 		active: currentPage?.route.name === 'migration',
 	}, {

@@ -1,7 +1,14 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 // AID
 // 長さ8の[2000年1月1日からの経過ミリ秒をbase36でエンコードしたもの] + 長さ2の[ノイズ文字列]
 
 import * as crypto from 'node:crypto';
+
+export const aidRegExp = /^[0-9a-z]{10}$/;
 
 const TIME2000 = 946684800000;
 let counter = crypto.randomBytes(2).readUInt16LE(0);
@@ -17,9 +24,8 @@ function getNoise(): string {
 	return counter.toString(36).padStart(2, '0').slice(-2);
 }
 
-export function genAid(date: Date): string {
-	const t = date.getTime();
-	if (isNaN(t)) throw 'Failed to create AID: Invalid Date';
+export function genAid(t: number): string {
+	if (isNaN(t)) throw new Error('Failed to create AID: Invalid Date');
 	counter++;
 	return getTime(t) + getNoise();
 }

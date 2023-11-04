@@ -1,4 +1,9 @@
-import { ColdDeviceStorage } from '@/store';
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
+import { defaultStore } from '@/store.js';
 
 const cache = new Map<string, HTMLAudioElement>();
 
@@ -67,21 +72,20 @@ export function getAudio(file: string, useCache = true): HTMLAudioElement {
 }
 
 export function setVolume(audio: HTMLAudioElement, volume: number): HTMLAudioElement {
-	const masterVolume = ColdDeviceStorage.get('sound_masterVolume');
+	const masterVolume = defaultStore.state.sound_masterVolume;
 	audio.volume = masterVolume - ((1 - volume) * masterVolume);
 	return audio;
 }
 
 export function play(type: 'noteMy' | 'note' | 'antenna' | 'channel' | 'notification') {
-	const sound = ColdDeviceStorage.get(`sound_${type}`);
+	const sound = defaultStore.state[`sound_${type}`];
+	if (_DEV_) console.log('play', type, sound);
 	if (sound.type == null) return;
 	playFile(sound.type, sound.volume);
 }
 
 export function playFile(file: string, volume: number) {
-	const masterVolume = ColdDeviceStorage.get('sound_masterVolume');
-	if (masterVolume === 0) return;
-
 	const audio = setVolume(getAudio(file), volume);
+	if (audio.volume === 0) return;
 	audio.play();
 }

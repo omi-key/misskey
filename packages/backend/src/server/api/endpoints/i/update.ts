@@ -1,12 +1,20 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 import RE2 from 're2';
 import * as mfm from 'mfm-js';
 import { Inject, Injectable } from '@nestjs/common';
+import ms from 'ms';
+import { JSDOM } from 'jsdom';
 import { extractCustomEmojisFromMfm } from '@/misc/extract-custom-emojis-from-mfm.js';
 import { extractHashtags } from '@/misc/extract-hashtags.js';
-import type { UsersRepository, DriveFilesRepository, UserProfilesRepository, PagesRepository } from '@/models/index.js';
-import type { User } from '@/models/entities/User.js';
-import { birthdaySchema, descriptionSchema, locationSchema, nameSchema } from '@/models/entities/User.js';
-import type { UserProfile } from '@/models/entities/UserProfile.js';
+import * as Acct from '@/misc/acct.js';
+import type { UsersRepository, DriveFilesRepository, UserProfilesRepository, PagesRepository } from '@/models/_.js';
+import type { MiLocalUser, MiUser } from '@/models/User.js';
+import { birthdaySchema, descriptionSchema, locationSchema, nameSchema } from '@/models/User.js';
+import type { MiUserProfile } from '@/models/UserProfile.js';
 import { notificationTypes } from '@/types.js';
 import { normalizeForSearch } from '@/misc/normalize-for-search.js';
 import { langmap } from '@/misc/langmap.js';
@@ -19,7 +27,13 @@ import { HashtagService } from '@/core/HashtagService.js';
 import { DI } from '@/di-symbols.js';
 import { RoleService } from '@/core/RoleService.js';
 import { CacheService } from '@/core/CacheService.js';
+import { RemoteUserResolveService } from '@/core/RemoteUserResolveService.js';
 import { DriveFileEntityService } from '@/core/entities/DriveFileEntityService.js';
+import { HttpRequestService } from '@/core/HttpRequestService.js';
+import type { Config } from '@/config.js';
+import { safeForSql } from '@/misc/safe-for-sql.js';
+import { AvatarDecorationService } from '@/core/AvatarDecorationService.js';
+import { ApiLoggerService } from '../../ApiLoggerService.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
@@ -28,6 +42,11 @@ export const meta = {
 	requireCredential: true,
 
 	kind: 'write:account',
+
+	limit: {
+		duration: ms('1hour'),
+		max: 20,
+	},
 
 	errors: {
 		noSuchAvatar: {
@@ -71,6 +90,30 @@ export const meta = {
 			code: 'TOO_MANY_MUTED_WORDS',
 			id: '010665b1-a211-42d2-bc64-8f6609d79785',
 		},
+
+		noSuchUser: {
+			message: 'No such user.',
+			code: 'NO_SUCH_USER',
+			id: 'fcd2eef9-a9b2-4c4f-8624-038099e90aa5',
+		},
+
+		uriNull: {
+			message: 'User ActivityPup URI is null.',
+			code: 'URI_NULL',
+			id: 'bf326f31-d430-4f97-9933-5d61e4d48a23',
+		},
+
+		forbiddenToSetYourself: {
+			message: 'You can\'t set yourself as your own alias.',
+			code: 'FORBIDDEN_TO_SET_YOURSELF',
+			id: '25c90186-4ab0-49c8-9bba-a1fa6c202ba4',
+		},
+
+		restrictedByRole: {
+			message: 'This feature is restricted by your role.',
+			code: 'RESTRICTED_BY_ROLE',
+			id: '8feff0ba-5ab5-585b-31f4-4df816663fad',
+		},
 	},
 
 	res: {
@@ -89,6 +132,15 @@ export const paramDef = {
 		birthday: { ...birthdaySchema, nullable: true },
 		lang: { type: 'string', enum: [null, ...Object.keys(langmap)] as string[], nullable: true },
 		avatarId: { type: 'string', format: 'misskey:id', nullable: true },
+		avatarDecorations: { type: 'array', maxItems: 1, items: {
+			type: 'object',
+			properties: {
+				id: { type: 'string', format: 'misskey:id' },
+				angle: { type: 'number', nullable: true, maximum: 0.5, minimum: -0.5 },
+				flipH: { type: 'boolean', nullable: true },
+			},
+			required: ['id'],
+		} },
 		bannerId: { type: 'string', format: 'misskey:id', nullable: true },
 		fields: {
 			type: 'array',
@@ -110,32 +162,38 @@ export const paramDef = {
 		carefulBot: { type: 'boolean' },
 		autoAcceptFollowed: { type: 'boolean' },
 		noCrawle: { type: 'boolean' },
+		preventAiLearning: { type: 'boolean' },
 		isBot: { type: 'boolean' },
 		isCat: { type: 'boolean' },
-		showTimelineReplies: { type: 'boolean' },
 		injectFeaturedNote: { type: 'boolean' },
 		receiveAnnouncementEmail: { type: 'boolean' },
 		alwaysMarkNsfw: { type: 'boolean' },
 		autoSensitive: { type: 'boolean' },
 		ffVisibility: { type: 'string', enum: ['public', 'followers', 'private'] },
-		pinnedPageId: { type: 'string', format: 'misskey:id' },
+		pinnedPageId: { type: 'string', format: 'misskey:id', nullable: true },
 		mutedWords: { type: 'array' },
 		mutedInstances: { type: 'array', items: {
 			type: 'string',
 		} },
-		mutingNotificationTypes: { type: 'array', items: {
-			type: 'string', enum: notificationTypes,
-		} },
+		notificationRecieveConfig: { type: 'object' },
 		emailNotificationTypes: { type: 'array', items: {
 			type: 'string',
 		} },
+		alsoKnownAs: {
+			type: 'array',
+			maxItems: 10,
+			uniqueItems: true,
+			items: { type: 'string' },
+		},
 	},
 } as const;
 
-// eslint-disable-next-line import/no-default-export
 @Injectable()
-export default class extends Endpoint<typeof meta, typeof paramDef> {
+export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
+		@Inject(DI.config)
+		private config: Config,
+
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
 
@@ -153,16 +211,20 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 		private globalEventService: GlobalEventService,
 		private userFollowingService: UserFollowingService,
 		private accountUpdateService: AccountUpdateService,
+		private remoteUserResolveService: RemoteUserResolveService,
+		private apiLoggerService: ApiLoggerService,
 		private hashtagService: HashtagService,
 		private roleService: RoleService,
 		private cacheService: CacheService,
+		private httpRequestService: HttpRequestService,
+		private avatarDecorationService: AvatarDecorationService,
 	) {
 		super(meta, paramDef, async (ps, _user, token) => {
-			const user = await this.usersRepository.findOneByOrFail({ id: _user.id });
+			const user = await this.usersRepository.findOneByOrFail({ id: _user.id }) as MiLocalUser;
 			const isSecure = token == null;
 
-			const updates = {} as Partial<User>;
-			const profileUpdates = {} as Partial<UserProfile>;
+			const updates = {} as Partial<MiUser>;
+			const profileUpdates = {} as Partial<MiUserProfile>;
 
 			const profile = await this.userProfilesRepository.findOneByOrFail({ userId: user.id });
 
@@ -195,20 +257,23 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 				profileUpdates.enableWordMute = ps.mutedWords.length > 0;
 			}
 			if (ps.mutedInstances !== undefined) profileUpdates.mutedInstances = ps.mutedInstances;
-			if (ps.mutingNotificationTypes !== undefined) profileUpdates.mutingNotificationTypes = ps.mutingNotificationTypes as typeof notificationTypes[number][];
+			if (ps.notificationRecieveConfig !== undefined) profileUpdates.notificationRecieveConfig = ps.notificationRecieveConfig;
 			if (typeof ps.isLocked === 'boolean') updates.isLocked = ps.isLocked;
 			if (typeof ps.isExplorable === 'boolean') updates.isExplorable = ps.isExplorable;
 			if (typeof ps.hideOnlineStatus === 'boolean') updates.hideOnlineStatus = ps.hideOnlineStatus;
 			if (typeof ps.publicReactions === 'boolean') profileUpdates.publicReactions = ps.publicReactions;
 			if (typeof ps.isBot === 'boolean') updates.isBot = ps.isBot;
-			if (typeof ps.showTimelineReplies === 'boolean') updates.showTimelineReplies = ps.showTimelineReplies;
 			if (typeof ps.carefulBot === 'boolean') profileUpdates.carefulBot = ps.carefulBot;
 			if (typeof ps.autoAcceptFollowed === 'boolean') profileUpdates.autoAcceptFollowed = ps.autoAcceptFollowed;
 			if (typeof ps.noCrawle === 'boolean') profileUpdates.noCrawle = ps.noCrawle;
+			if (typeof ps.preventAiLearning === 'boolean') profileUpdates.preventAiLearning = ps.preventAiLearning;
 			if (typeof ps.isCat === 'boolean') updates.isCat = ps.isCat;
 			if (typeof ps.injectFeaturedNote === 'boolean') profileUpdates.injectFeaturedNote = ps.injectFeaturedNote;
 			if (typeof ps.receiveAnnouncementEmail === 'boolean') profileUpdates.receiveAnnouncementEmail = ps.receiveAnnouncementEmail;
-			if (typeof ps.alwaysMarkNsfw === 'boolean') profileUpdates.alwaysMarkNsfw = ps.alwaysMarkNsfw;
+			if (typeof ps.alwaysMarkNsfw === 'boolean') {
+				if ((await roleService.getUserPolicies(user.id)).alwaysMarkNsfw) throw new ApiError(meta.errors.restrictedByRole);
+				profileUpdates.alwaysMarkNsfw = ps.alwaysMarkNsfw;
+			}
 			if (typeof ps.autoSensitive === 'boolean') profileUpdates.autoSensitive = ps.autoSensitive;
 			if (ps.emailNotificationTypes !== undefined) profileUpdates.emailNotificationTypes = ps.emailNotificationTypes;
 
@@ -221,6 +286,10 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 				updates.avatarId = avatar.id;
 				updates.avatarUrl = this.driveFileEntityService.getPublicUrl(avatar, 'avatar');
 				updates.avatarBlurhash = avatar.blurhash;
+			} else if (ps.avatarId === null) {
+				updates.avatarId = null;
+				updates.avatarUrl = null;
+				updates.avatarBlurhash = null;
 			}
 
 			if (ps.bannerId) {
@@ -232,6 +301,25 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 				updates.bannerId = banner.id;
 				updates.bannerUrl = this.driveFileEntityService.getPublicUrl(banner);
 				updates.bannerBlurhash = banner.blurhash;
+			} else if (ps.bannerId === null) {
+				updates.bannerId = null;
+				updates.bannerUrl = null;
+				updates.bannerBlurhash = null;
+			}
+
+			if (ps.avatarDecorations) {
+				const decorations = await this.avatarDecorationService.getAll(true);
+				const myRoles = await this.roleService.getUserRoles(user.id);
+				const allRoles = await this.roleService.getRoles();
+				const decorationIds = decorations
+					.filter(d => d.roleIdsThatCanBeUsedThisDecoration.filter(roleId => allRoles.some(r => r.id === roleId)).length === 0 || myRoles.some(r => d.roleIdsThatCanBeUsedThisDecoration.includes(r.id)))
+					.map(d => d.id);
+
+				updates.avatarDecorations = ps.avatarDecorations.filter(d => decorationIds.includes(d.id)).map(d => ({
+					id: d.id,
+					angle: d.angle ?? 0,
+					flipH: d.flipH ?? false,
+				}));
 			}
 
 			if (ps.pinnedPageId) {
@@ -246,10 +334,42 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 
 			if (ps.fields) {
 				profileUpdates.fields = ps.fields
-					.filter(x => typeof x.name === 'string' && x.name !== '' && typeof x.value === 'string' && x.value !== '')
+					.filter(x => typeof x.name === 'string' && x.name.trim() !== '' && typeof x.value === 'string' && x.value.trim() !== '')
 					.map(x => {
-						return { name: x.name, value: x.value };
+						return { name: x.name.trim(), value: x.value.trim() };
 					});
+			}
+
+			if (ps.alsoKnownAs) {
+				if (_user.movedToUri) {
+					throw new ApiError({
+						message: 'You have moved your account.',
+						code: 'YOUR_ACCOUNT_MOVED',
+						id: '56f20ec9-fd06-4fa5-841b-edd6d7d4fa31',
+						httpStatusCode: 403,
+					});
+				}
+
+				// Parse user's input into the old account
+				const newAlsoKnownAs = new Set<string>();
+				for (const line of ps.alsoKnownAs) {
+					if (!line) throw new ApiError(meta.errors.noSuchUser);
+					const { username, host } = Acct.parse(line);
+
+					// Retrieve the old account
+					const knownAs = await this.remoteUserResolveService.resolveUser(username, host).catch((e) => {
+						this.apiLoggerService.logger.warn(`failed to resolve dstination user: ${e}`);
+						throw new ApiError(meta.errors.noSuchUser);
+					});
+					if (knownAs.id === _user.id) throw new ApiError(meta.errors.forbiddenToSetYourself);
+
+					const toUrl = this.userEntityService.getUserUri(knownAs);
+					if (!toUrl) throw new ApiError(meta.errors.uriNull);
+
+					newAlsoKnownAs.add(toUrl);
+				}
+
+				updates.alsoKnownAs = newAlsoKnownAs.size > 0 ? Array.from(newAlsoKnownAs) : null;
 			}
 
 			//#region emojis/tags
@@ -279,7 +399,14 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 			//#endregion
 
 			if (Object.keys(updates).length > 0) await this.usersRepository.update(user.id, updates);
-			if (Object.keys(profileUpdates).length > 0) await this.userProfilesRepository.update(user.id, profileUpdates);
+			if (Object.keys(updates).includes('alsoKnownAs')) {
+				this.cacheService.uriPersonCache.set(this.userEntityService.genLocalUserUri(user.id), { ...user, ...updates });
+			}
+
+			await this.userProfilesRepository.update(user.id, {
+				...profileUpdates,
+				verifiedLinks: [],
+			});
 
 			const iObj = await this.userEntityService.pack<true, true>(user.id, user, {
 				detail: true,
@@ -301,7 +428,38 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 			// フォロワーにUpdateを配信
 			this.accountUpdateService.publishToFollowers(user.id);
 
+			const urls = updatedProfile.fields.filter(x => x.value.startsWith('https://'));
+			for (const url of urls) {
+				this.verifyLink(url.value, user);
+			}
+
 			return iObj;
 		});
+	}
+
+	private async verifyLink(url: string, user: MiLocalUser) {
+		if (!safeForSql(url)) return;
+
+		const html = await this.httpRequestService.getHtml(url);
+
+		const { window } = new JSDOM(html);
+		const doc = window.document;
+
+		const myLink = `${this.config.url}/@${user.username}`;
+
+		const aEls = Array.from(doc.getElementsByTagName('a'));
+		const linkEls = Array.from(doc.getElementsByTagName('link'));
+
+		const includesMyLink = aEls.some(a => a.href === myLink);
+		const includesRelMeLinks = [...aEls, ...linkEls].some(link => link.rel === 'me' && link.href === myLink);
+
+		if (includesMyLink || includesRelMeLinks) {
+			await this.userProfilesRepository.createQueryBuilder('profile').update()
+				.where('userId = :userId', { userId: user.id })
+				.set({
+					verifiedLinks: () => `array_append("verifiedLinks", '${url}')`, // ここでSQLインジェクションされそうなのでとりあえず safeForSql で弾いている
+				})
+				.execute();
+		}
 	}
 }

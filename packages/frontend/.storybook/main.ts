@@ -1,7 +1,16 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { StorybookConfig } from '@storybook/vue3-vite';
-import { mergeConfig } from 'vite';
+import { type Plugin, mergeConfig } from 'vite';
 import turbosnap from 'vite-plugin-turbosnap';
+
+const dirname = fileURLToPath(new URL('.', import.meta.url));
+
 const config = {
 	stories: ['../src/**/*.mdx', '../src/**/*.stories.@(js|jsx|ts|tsx)'],
 	addons: [
@@ -9,7 +18,7 @@ const config = {
 		'@storybook/addon-interactions',
 		'@storybook/addon-links',
 		'@storybook/addon-storysource',
-		resolve(__dirname, '../node_modules/storybook-addon-misskey-theme'),
+		resolve(dirname, '../node_modules/storybook-addon-misskey-theme'),
 	],
 	framework: {
 		name: '@storybook/vue3-vite',
@@ -22,9 +31,14 @@ const config = {
 		disableTelemetry: true,
 	},
 	async viteFinal(config) {
+		const replacePluginForIsChromatic = config.plugins?.findIndex((plugin) => plugin && (plugin as Partial<Plugin>)?.name === 'replace') ?? -1;
+		if (~replacePluginForIsChromatic) {
+			config.plugins?.splice(replacePluginForIsChromatic, 1);
+		}
 		return mergeConfig(config, {
 			plugins: [
-				turbosnap({
+				// XXX: https://github.com/IanVS/vite-plugin-turbosnap/issues/8
+				(turbosnap as any as typeof turbosnap['default'])({
 					rootDir: config.root ?? process.cwd(),
 				}),
 			],

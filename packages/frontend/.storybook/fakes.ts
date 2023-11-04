@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 import type { entities } from 'misskey-js'
 
 export function abuseUserReport() {
@@ -69,6 +74,7 @@ export function userDetailed(id = 'someuserid', username = 'miskist', host = 'mi
 		onlineStatus: 'unknown',
 		avatarUrl: 'https://github.com/misskey-dev/misskey/blob/master/packages/frontend/assets/about-icon.png?raw=true',
 		avatarBlurhash: 'eQFRshof5NWBRi},juayfPju53WB?0ofs;s*a{ofjuay^SoMEJR%ay',
+		avatarDecorations: [],
 		emojis: [],
 		bannerBlurhash: 'eQA^IW^-MH8w9tE8I=S^o{$*R4RikXtSxutRozjEnNR.RQadoyozog',
 		bannerColor: '#000000',
@@ -77,12 +83,14 @@ export function userDetailed(id = 'someuserid', username = 'miskist', host = 'mi
 		createdAt: '2016-12-28T22:49:51.000Z',
 		description: 'I am a cool user!',
 		ffVisibility: 'public',
+		roles: [],
 		fields: [
 			{
 				name: 'Website',
 				value: 'https://misskey-hub.net',
 			},
 		],
+		verifiedLinks: [],
 		followersCount: 1024,
 		followingCount: 16,
 		hasPendingFollowRequestFromYou: false,
@@ -109,8 +117,34 @@ export function userDetailed(id = 'someuserid', username = 'miskist', host = 'mi
 		publicReactions: false,
 		securityKeys: false,
 		twoFactorEnabled: false,
+		twoFactorBackupCodesStock: 'none',
 		updatedAt: null,
 		uri: null,
 		url: null,
+		notify: 'none',
 	};
+}
+
+export function inviteCode(isUsed = false, hasExpiration = false, isExpired = false, isCreatedBySystem = false) {
+	const date = new Date();
+	const createdAt = new Date();
+	createdAt.setDate(date.getDate() - 1)
+	const expiresAt = new Date();
+
+	if (isExpired) {
+		expiresAt.setHours(date.getHours() - 1)
+	} else {
+		expiresAt.setHours(date.getHours() + 1)
+	}
+
+	return {
+		id: "9gyqzizw77",
+		code: "SLF3JKF7UV2H9",
+		expiresAt: hasExpiration ? expiresAt.toISOString() : null,
+		createdAt: createdAt.toISOString(),
+		createdBy: isCreatedBySystem ? null : userDetailed('8i3rvznx32'),
+		usedBy: isUsed ? userDetailed('3i3r2znx1v') : null,
+		usedAt: isUsed ? date.toISOString() : null,
+		used: isUsed,
+	}
 }

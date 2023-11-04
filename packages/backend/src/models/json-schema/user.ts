@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 export const packedUserLiteSchema = {
 	type: 'object',
 	properties: {
@@ -31,6 +36,34 @@ export const packedUserLiteSchema = {
 		avatarBlurhash: {
 			type: 'string',
 			nullable: true, optional: false,
+		},
+		avatarDecorations: {
+			type: 'array',
+			nullable: false, optional: false,
+			items: {
+				type: 'object',
+				nullable: false, optional: false,
+				properties: {
+					id: {
+						type: 'string',
+						nullable: false, optional: false,
+						format: 'id',
+					},
+					url: {
+						type: 'string',
+						format: 'url',
+						nullable: false, optional: false,
+					},
+					angle: {
+						type: 'number',
+						nullable: false, optional: true,
+					},
+					flipH: {
+						type: 'boolean',
+						nullable: false, optional: true,
+					},
+				},
+			},
 		},
 		isAdmin: {
 			type: 'boolean',
@@ -80,9 +113,14 @@ export const packedUserDetailedNotMeOnlySchema = {
 		},
 		alsoKnownAs: {
 			type: 'array',
-			format: 'uri',
 			nullable: true,
 			optional: false,
+			items: {
+				type: 'string',
+				format: 'id',
+				nullable: false,
+				optional: false,
+			},
 		},
 		createdAt: {
 			type: 'string',
@@ -143,6 +181,7 @@ export const packedUserDetailedNotMeOnlySchema = {
 		fields: {
 			type: 'array',
 			nullable: false, optional: false,
+			maxItems: 16,
 			items: {
 				type: 'object',
 				nullable: false, optional: false,
@@ -156,7 +195,15 @@ export const packedUserDetailedNotMeOnlySchema = {
 						nullable: false, optional: false,
 					},
 				},
-				maxLength: 4,
+			},
+		},
+		verifiedLinks: {
+			type: 'array',
+			nullable: false, optional: false,
+			items: {
+				type: 'string',
+				nullable: false, optional: false,
+				format: 'url',
 			},
 		},
 		followersCount: {
@@ -250,6 +297,18 @@ export const packedUserDetailedNotMeOnlySchema = {
 			type: 'boolean',
 			nullable: false, optional: true,
 		},
+		memo: {
+			type: 'string',
+			nullable: false, optional: true,
+		},
+		notify: {
+			type: 'string',
+			nullable: false, optional: true,
+		},
+		withReplies: {
+			type: 'boolean',
+			nullable: false, optional: true,
+		},
 		//#endregion
 	},
 } as const;
@@ -293,7 +352,11 @@ export const packedMeDetailedOnlySchema = {
 		},
 		noCrawle: {
 			type: 'boolean',
-			nullable: true, optional: false,
+			nullable: false, optional: false,
+		},
+		preventAiLearning: {
+			type: 'boolean',
+			nullable: false, optional: false,
 		},
 		isExplorable: {
 			type: 'boolean',
@@ -301,6 +364,11 @@ export const packedMeDetailedOnlySchema = {
 		},
 		isDeleted: {
 			type: 'boolean',
+			nullable: false, optional: false,
+		},
+		twoFactorBackupCodesStock: {
+			type: 'string',
+			enum: ['full', 'partial', 'none'],
 			nullable: false, optional: false,
 		},
 		hideOnlineStatus: {
@@ -331,6 +399,10 @@ export const packedMeDetailedOnlySchema = {
 			type: 'boolean',
 			nullable: false, optional: false,
 		},
+		unreadNotificationsCount: {
+			type: 'number',
+			nullable: false, optional: false,
+		},
 		mutedWords: {
 			type: 'array',
 			nullable: false, optional: false,
@@ -351,13 +423,9 @@ export const packedMeDetailedOnlySchema = {
 				nullable: false, optional: false,
 			},
 		},
-		mutingNotificationTypes: {
-			type: 'array',
-			nullable: true, optional: false,
-			items: {
-				type: 'string',
-				nullable: false, optional: false,
-			},
+		notificationRecieveConfig: {
+			type: 'object',
+			nullable: false, optional: false,
 		},
 		emailNotificationTypes: {
 			type: 'array',

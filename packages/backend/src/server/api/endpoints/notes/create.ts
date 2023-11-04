@@ -1,22 +1,30 @@
+/*
+ * SPDX-FileCopyrightText: syuilo and other misskey contributors
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 import ms from 'ms';
 import { In } from 'typeorm';
 import { Inject, Injectable } from '@nestjs/common';
-import type { User } from '@/models/entities/User.js';
-import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository } from '@/models/index.js';
-import type { DriveFile } from '@/models/entities/DriveFile.js';
-import type { Note } from '@/models/entities/Note.js';
-import type { Channel } from '@/models/entities/Channel.js';
+import type { MiUser } from '@/models/User.js';
+import type { UsersRepository, NotesRepository, BlockingsRepository, DriveFilesRepository, ChannelsRepository } from '@/models/_.js';
+import type { MiDriveFile } from '@/models/DriveFile.js';
+import type { MiNote } from '@/models/Note.js';
+import type { MiChannel } from '@/models/Channel.js';
 import { MAX_NOTE_TEXT_LENGTH } from '@/const.js';
 import { Endpoint } from '@/server/api/endpoint-base.js';
 import { NoteEntityService } from '@/core/entities/NoteEntityService.js';
 import { NoteCreateService } from '@/core/NoteCreateService.js';
 import { DI } from '@/di-symbols.js';
+import { isPureRenote } from '@/misc/is-pure-renote.js';
 import { ApiError } from '../../error.js';
 
 export const meta = {
 	tags: ['notes'],
 
 	requireCredential: true,
+
+	prohibitMoved: true,
 
 	limit: {
 		duration: ms('1hour'),
@@ -48,6 +56,12 @@ export const meta = {
 			message: 'You can not Renote a pure Renote.',
 			code: 'CANNOT_RENOTE_TO_A_PURE_RENOTE',
 			id: 'fd4cc33e-2a37-48dd-99cc-9b806eb2031a',
+		},
+
+		cannotRenoteDueToVisibility: {
+			message: 'You can not Renote due to target visibility.',
+			code: 'CANNOT_RENOTE_DUE_TO_VISIBILITY',
+			id: 'be9529e9-fe72-4de0-ae43-0b363c4938af',
 		},
 
 		noSuchReplyTarget: {
@@ -85,6 +99,12 @@ export const meta = {
 			code: 'NO_SUCH_FILE',
 			id: 'b6992544-63e7-67f0-fa7f-32444b1b5306',
 		},
+
+		cannotRenoteOutsideOfChannel: {
+			message: 'Cannot renote outside of channel.',
+			code: 'CANNOT_RENOTE_OUTSIDE_OF_CHANNEL',
+			id: '33510210-8452-094c-6227-4a6c05d99f00',
+		},
 	},
 } as const;
 
@@ -95,9 +115,9 @@ export const paramDef = {
 		visibleUserIds: { type: 'array', uniqueItems: true, items: {
 			type: 'string', format: 'misskey:id',
 		} },
-		cw: { type: 'string', nullable: true, maxLength: 100 },
+		cw: { type: 'string', nullable: true, minLength: 1, maxLength: 100 },
 		localOnly: { type: 'boolean', default: false },
-		reactionAcceptance: { type: 'string', nullable: true, enum: [null, 'likeOnly', 'likeOnlyForRemote'], default: null },
+		reactionAcceptance: { type: 'string', nullable: true, enum: [null, 'likeOnly', 'likeOnlyForRemote', 'nonSensitiveOnly', 'nonSensitiveOnlyForLocalLikeOnlyForRemote'], default: null },
 		noExtractMentions: { type: 'boolean', default: false },
 		noExtractHashtags: { type: 'boolean', default: false },
 		noExtractEmojis: { type: 'boolean', default: false },
@@ -111,7 +131,7 @@ export const paramDef = {
 			type: 'string',
 			minLength: 1,
 			maxLength: MAX_NOTE_TEXT_LENGTH,
-			nullable: false,
+			nullable: true,
 		},
 		fileIds: {
 			type: 'array',
@@ -155,9 +175,8 @@ export const paramDef = {
 	],
 } as const;
 
-// eslint-disable-next-line import/no-default-export
 @Injectable()
-export default class extends Endpoint<typeof meta, typeof paramDef> {
+export default class extends Endpoint<typeof meta, typeof paramDef> { // eslint-disable-line import/no-default-export
 	constructor(
 		@Inject(DI.usersRepository)
 		private usersRepository: UsersRepository,
@@ -178,15 +197,15 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 		private noteCreateService: NoteCreateService,
 	) {
 		super(meta, paramDef, async (ps, me) => {
-			let visibleUsers: User[] = [];
+			let visibleUsers: MiUser[] = [];
 			if (ps.visibleUserIds) {
 				visibleUsers = await this.usersRepository.findBy({
 					id: In(ps.visibleUserIds),
 				});
 			}
 
-			let files: DriveFile[] = [];
-			const fileIds = ps.fileIds != null ? ps.fileIds : ps.mediaIds != null ? ps.mediaIds : null;
+			let files: MiDriveFile[] = [];
+			const fileIds = ps.fileIds ?? ps.mediaIds ?? null;
 			if (fileIds != null) {
 				files = await this.driveFilesRepository.createQueryBuilder('file')
 					.where('file.userId = :userId AND file.id IN (:...fileIds)', {
@@ -202,47 +221,72 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 				}
 			}
 
-			let renote: Note | null = null;
+			let renote: MiNote | null = null;
 			if (ps.renoteId != null) {
 				// Fetch renote to note
 				renote = await this.notesRepository.findOneBy({ id: ps.renoteId });
 
 				if (renote == null) {
 					throw new ApiError(meta.errors.noSuchRenoteTarget);
-				} else if (renote.renoteId && !renote.text && !renote.fileIds && !renote.hasPoll) {
+				} else if (isPureRenote(renote)) {
 					throw new ApiError(meta.errors.cannotReRenote);
 				}
 
 				// Check blocking
 				if (renote.userId !== me.id) {
-					const block = await this.blockingsRepository.findOneBy({
-						blockerId: renote.userId,
-						blockeeId: me.id,
+					const blockExist = await this.blockingsRepository.exist({
+						where: {
+							blockerId: renote.userId,
+							blockeeId: me.id,
+						},
 					});
-					if (block) {
+					if (blockExist) {
 						throw new ApiError(meta.errors.youHaveBeenBlocked);
+					}
+				}
+
+				if (renote.visibility === 'followers' && renote.userId !== me.id) {
+					// 他人のfollowers noteはreject
+					throw new ApiError(meta.errors.cannotRenoteDueToVisibility);
+				} else if (renote.visibility === 'specified') {
+					// specified / direct noteはreject
+					throw new ApiError(meta.errors.cannotRenoteDueToVisibility);
+				}
+
+				if (renote.channelId && renote.channelId !== ps.channelId) {
+					// チャンネルのノートに対しリノート要求がきたとき、チャンネル外へのリノート可否をチェック
+					// リノートのユースケースのうち、チャンネル内→チャンネル外は少数だと考えられるため、JOINはせず必要な時に都度取得する
+					const renoteChannel = await this.channelsRepository.findOneById(renote.channelId);
+					if (renoteChannel == null) {
+						// リノートしたいノートが書き込まれているチャンネルが無い
+						throw new ApiError(meta.errors.noSuchChannel);
+					} else if (!renoteChannel.allowRenoteToExternal) {
+						// リノート作成のリクエストだが、対象チャンネルがリノート禁止だった場合
+						throw new ApiError(meta.errors.cannotRenoteOutsideOfChannel);
 					}
 				}
 			}
 
-			let reply: Note | null = null;
+			let reply: MiNote | null = null;
 			if (ps.replyId != null) {
 				// Fetch reply
 				reply = await this.notesRepository.findOneBy({ id: ps.replyId });
 
 				if (reply == null) {
 					throw new ApiError(meta.errors.noSuchReplyTarget);
-				} else if (reply.renoteId && !reply.text && !reply.fileIds && !reply.hasPoll) {
+				} else if (isPureRenote(reply)) {
 					throw new ApiError(meta.errors.cannotReplyToPureRenote);
 				}
 
 				// Check blocking
 				if (reply.userId !== me.id) {
-					const block = await this.blockingsRepository.findOneBy({
-						blockerId: reply.userId,
-						blockeeId: me.id,
+					const blockExist = await this.blockingsRepository.exist({
+						where: {
+							blockerId: reply.userId,
+							blockeeId: me.id,
+						},
 					});
-					if (block) {
+					if (blockExist) {
 						throw new ApiError(meta.errors.youHaveBeenBlocked);
 					}
 				}
@@ -258,9 +302,9 @@ export default class extends Endpoint<typeof meta, typeof paramDef> {
 				}
 			}
 
-			let channel: Channel | null = null;
+			let channel: MiChannel | null = null;
 			if (ps.channelId != null) {
-				channel = await this.channelsRepository.findOneBy({ id: ps.channelId });
+				channel = await this.channelsRepository.findOneBy({ id: ps.channelId, isArchived: false });
 
 				if (channel == null) {
 					throw new ApiError(meta.errors.noSuchChannel);

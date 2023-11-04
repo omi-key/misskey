@@ -11,17 +11,17 @@ jobs:
   pnpm_install:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3.3.0
+    - uses: actions/checkout@v4.1.1
       with:
         fetch-depth: 0
         submodules: true
     - uses: pnpm/action-setup@v2
       with:
-        version: 7
+        version: 8
         run_install: false
-    - uses: actions/setup-node@v3.6.0
+    - uses: actions/setup-node@v4.0.0
       with:
-        node-version: 18.x
+        node-version-file: '.node-version'
         cache: 'pnpm'
     - run: corepack enable
     - run: pnpm i --frozen-lockfile
@@ -38,7 +38,7 @@ jobs:
         - sw
         - misskey-js
     steps:
-    - uses: actions/checkout@v3.3.0
+    - uses: actions/checkout@v4.1.1
       with:
         fetch-depth: 0
         submodules: true
@@ -46,9 +46,9 @@ jobs:
       with:
         version: 7
         run_install: false
-    - uses: actions/setup-node@v3.6.0
+    - uses: actions/setup-node@v4.0.0
       with:
-        node-version: 18.x
+        node-version-file: '.node-version'
         cache: 'pnpm'
     - run: corepack enable
     - run: pnpm i --frozen-lockfile
@@ -64,7 +64,7 @@ jobs:
         - backend
         - misskey-js
     steps:
-    - uses: actions/checkout@v3.3.0
+    - uses: actions/checkout@v4.1.1
       with:
         fetch-depth: 0
         submodules: true
@@ -72,9 +72,9 @@ jobs:
       with:
         version: 7
         run_install: false
-    - uses: actions/setup-node@v3.6.0
+    - uses: actions/setup-node@v4.0.0
       with:
-        node-version: 18.x
+        node-version-file: '.node-version'
         cache: 'pnpm'
     - run: corepack enable
     - run: pnpm i --frozen-lockfile

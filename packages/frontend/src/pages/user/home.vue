@@ -1,5 +1,10 @@
+<!--
+SPDX-FileCopyrightText: syuilo and other misskey contributors
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+
 <template>
-<MkSpacer :content-max="narrow ? 800 : 1100">
+<MkSpacer :contentMax="narrow ? 800 : 1100">
 	<div ref="rootEl" class="ftskorzw" :class="{ wide: !narrow }" style="container-type: inline-size;">
 		<div class="main _gaps">
 			<!-- TODO -->
@@ -7,7 +12,7 @@
 			<!-- <div class="punished" v-if="user.isSilenced"><i class="ti ti-alert-triangle" style="margin-right: 8px;"></i> {{ i18n.ts.userSilenced }}</div> -->
 
 			<div class="profile _gaps">
-				<MkAccountMoved v-if="user.movedToUri" :host="user.movedToUri.host" :acct="user.movedToUri.username"/>
+				<MkAccountMoved v-if="user.movedTo" :movedTo="user.movedTo"/>
 				<MkRemoteCaution v-if="user.host != null" :href="user.url ?? user.uri!" class="warn"/>
 
 				<div :key="user.id" class="main _panel">
@@ -21,12 +26,15 @@
 								<span v-if="user.isAdmin" :title="i18n.ts.isAdmin" style="color: var(--badge);"><i class="ti ti-shield"></i></span>
 								<span v-if="user.isLocked" :title="i18n.ts.isLocked"><i class="ti ti-lock"></i></span>
 								<span v-if="user.isBot" :title="i18n.ts.isBot"><i class="ti ti-robot"></i></span>
+								<button v-if="!isEditingMemo && !memoDraft" class="_button add-note-button" @click="showMemoTextarea">
+									<i class="ti ti-edit"/> {{ i18n.ts.addMemo }}
+								</button>
 							</div>
 						</div>
 						<span v-if="$i && $i.id != user.id && user.isFollowed" class="followed">{{ i18n.ts.followsYou }}</span>
 						<div v-if="$i" class="actions">
 							<button class="menu _button" @click="menu"><i class="ti ti-dots"></i></button>
-							<MkFollowButton v-if="$i.id != user.id" :user="user" :inline="true" :transparent="false" :full="true" class="koudoku"/>
+							<MkFollowButton v-if="$i.id != user.id" v-model:user="user" :inline="true" :transparent="false" :full="true" class="koudoku"/>
 						</div>
 					</div>
 					<MkAvatar class="avatar" :user="user" indicator/>
@@ -41,13 +49,34 @@
 					</div>
 					<div v-if="user.roles.length > 0" class="roles">
 						<span v-for="role in user.roles" :key="role.id" v-tooltip="role.description" class="role" :style="{ '--color': role.color }">
-							<img v-if="role.iconUrl" style="height: 1.3em; vertical-align: -22%;" :src="role.iconUrl"/>
-							{{ role.name }}
+							<MkA v-adaptive-bg :to="`/roles/${role.id}`">
+								<img v-if="role.iconUrl" style="height: 1.3em; vertical-align: -22%;" :src="role.iconUrl"/>
+								{{ role.name }}
+							</MkA>
 						</span>
+					</div>
+					<div v-if="iAmModerator" class="moderationNote">
+						<MkTextarea v-if="editModerationNote || (moderationNote != null && moderationNote !== '')" v-model="moderationNote" manualSave>
+							<template #label>{{ i18n.ts.moderationNote }}</template>
+						</MkTextarea>
+						<div v-else>
+							<MkButton small @click="editModerationNote = true">{{ i18n.ts.addModerationNote }}</MkButton>
+						</div>
+					</div>
+					<div v-if="isEditingMemo || memoDraft" class="memo" :class="{'no-memo': !memoDraft}">
+						<div class="heading" v-text="i18n.ts.memo"/>
+						<textarea
+							ref="memoTextareaEl"
+							v-model="memoDraft"
+							rows="1"
+							@focus="isEditingMemo = true"
+							@blur="updateMemo"
+							@input="adjustMemoTextarea"
+						/>
 					</div>
 					<div class="description">
 						<MkOmit>
-							<Mfm v-if="user.description" :text="user.description" :is-note="false" :author="user" :i="$i"/>
+							<Mfm v-if="user.description" :text="user.description" :isNote="false" :author="user"/>
 							<p v-else class="empty">{{ i18n.ts.noAccountDescription }}</p>
 						</MkOmit>
 					</div>
@@ -71,20 +100,21 @@
 								<Mfm :text="field.name" :plain="true" :colored="false"/>
 							</dt>
 							<dd class="value">
-								<Mfm :text="field.value" :author="user" :i="$i" :colored="false"/>
+								<Mfm :text="field.value" :author="user" :colored="false"/>
+								<i v-if="user.verifiedLinks.includes(field.value)" v-tooltip:dialog="i18n.ts.verifiedLink" class="ti ti-circle-check" :class="$style.verifiedLink"></i>
 							</dd>
 						</dl>
 					</div>
 					<div class="status">
-						<MkA v-click-anime :to="userPage(user)">
+						<MkA :to="userPage(user)">
 							<b>{{ number(user.notesCount) }}</b>
 							<span>{{ i18n.ts.notes }}</span>
 						</MkA>
-						<MkA v-click-anime :to="userPage(user, 'following')">
+						<MkA v-if="isFfVisibleForMe(user)" :to="userPage(user, 'following')">
 							<b>{{ number(user.followingCount) }}</b>
 							<span>{{ i18n.ts.following }}</span>
 						</MkA>
-						<MkA v-click-anime :to="userPage(user, 'followers')">
+						<MkA v-if="isFfVisibleForMe(user)" :to="userPage(user, 'followers')">
 							<b>{{ number(user.followersCount) }}</b>
 							<span>{{ i18n.ts.followers }}</span>
 						</MkA>
@@ -98,14 +128,17 @@
 				</div>
 				<MkInfo v-else-if="$i && $i.id === user.id">{{ i18n.ts.userPagePinTip }}</MkInfo>
 				<template v-if="narrow">
-					<XPhotos :key="user.id" :user="user"/>
+					<XFiles :key="user.id" :user="user"/>
 					<XActivity :key="user.id" :user="user"/>
 				</template>
-				<MkNotes v-if="!disableNotes" :class="$style.tl" :no-gap="true" :pagination="pagination"/>
+				<div v-if="!disableNotes">
+					<div style="margin-bottom: 8px;">{{ i18n.ts.featured }}</div>
+					<MkNotes :class="$style.tl" :noGap="true" :pagination="pagination"/>
+				</div>
 			</div>
 		</div>
 		<div v-if="!narrow" class="sub _gaps" style="container-type: inline-size;">
-			<XPhotos :key="user.id" :user="user"/>
+			<XFiles :key="user.id" :user="user"/>
 			<XActivity :key="user.id" :user="user"/>
 		</div>
 	</div>
@@ -113,32 +146,50 @@
 </template>
 
 <script lang="ts" setup>
-import { defineAsyncComponent, computed, onMounted, onUnmounted } from 'vue';
-import calcAge from 's-age';
-import * as misskey from 'misskey-js';
+import { defineAsyncComponent, computed, onMounted, onUnmounted, nextTick, watch } from 'vue';
+import * as Misskey from 'misskey-js';
 import MkNote from '@/components/MkNote.vue';
 import MkFollowButton from '@/components/MkFollowButton.vue';
 import MkAccountMoved from '@/components/MkAccountMoved.vue';
 import MkRemoteCaution from '@/components/MkRemoteCaution.vue';
+import MkTextarea from '@/components/MkTextarea.vue';
 import MkOmit from '@/components/MkOmit.vue';
 import MkInfo from '@/components/MkInfo.vue';
-import { getScrollPosition } from '@/scripts/scroll';
-import { getUserMenu } from '@/scripts/get-user-menu';
-import number from '@/filters/number';
-import { userPage } from '@/filters/user';
-import * as os from '@/os';
-import { useRouter } from '@/router';
-import { i18n } from '@/i18n';
-import { $i } from '@/account';
-import { dateString } from '@/filters/date';
-import { confetti } from '@/scripts/confetti';
+import MkButton from '@/components/MkButton.vue';
+import { getScrollPosition } from '@/scripts/scroll.js';
+import { getUserMenu } from '@/scripts/get-user-menu.js';
+import number from '@/filters/number.js';
+import { userPage } from '@/filters/user.js';
+import * as os from '@/os.js';
+import { useRouter } from '@/router.js';
+import { i18n } from '@/i18n.js';
+import { $i, iAmModerator } from '@/account.js';
+import { dateString } from '@/filters/date.js';
+import { confetti } from '@/scripts/confetti.js';
 import MkNotes from '@/components/MkNotes.vue';
+import { api } from '@/os.js';
+import { isFfVisibleForMe } from '@/scripts/isFfVisibleForMe.js';
 
-const XPhotos = defineAsyncComponent(() => import('./index.photos.vue'));
+function calcAge(birthdate: string): number {
+	const date = new Date(birthdate);
+	const now = new Date();
+
+	let yearDiff = now.getFullYear() - date.getFullYear();
+	const monthDiff = now.getMonth() - date.getMonth();
+	const pastDate = now.getDate() < date.getDate();
+
+	if (monthDiff < 0 || (monthDiff === 0 && pastDate)) {
+		yearDiff--;
+	}
+
+	return yearDiff;
+}
+
+const XFiles = defineAsyncComponent(() => import('./index.files.vue'));
 const XActivity = defineAsyncComponent(() => import('./index.activity.vue'));
 
 const props = withDefaults(defineProps<{
-	user: misskey.entities.UserDetailed;
+	user: Misskey.entities.UserDetailed;
 	/** Test only; MkNotes currently causes problems in vitest */
 	disableNotes: boolean;
 }>(), {
@@ -147,13 +198,23 @@ const props = withDefaults(defineProps<{
 
 const router = useRouter();
 
+let user = $ref(props.user);
 let parallaxAnimationId = $ref<null | number>(null);
 let narrow = $ref<null | boolean>(null);
 let rootEl = $ref<null | HTMLElement>(null);
 let bannerEl = $ref<null | HTMLElement>(null);
+let memoTextareaEl = $ref<null | HTMLElement>(null);
+let memoDraft = $ref(props.user.memo);
+let isEditingMemo = $ref(false);
+let moderationNote = $ref(props.user.moderationNote);
+let editModerationNote = $ref(false);
+
+watch($$(moderationNote), async () => {
+	await os.api('admin/update-user-note', { userId: props.user.id, text: moderationNote });
+});
 
 const pagination = {
-	endpoint: 'users/notes' as const,
+	endpoint: 'users/featured-notes' as const,
 	limit: 10,
 	params: computed(() => ({
 		userId: props.user.id,
@@ -172,7 +233,8 @@ const age = $computed(() => {
 });
 
 function menu(ev) {
-	os.popupMenu(getUserMenu(props.user, router), ev.currentTarget ?? ev.target);
+	const { menu, cleanup } = getUserMenu(user, router);
+	os.popupMenu(menu, ev.currentTarget ?? ev.target).finally(cleanup);
 }
 
 function parallaxLoop() {
@@ -193,6 +255,31 @@ function parallax() {
 	banner.style.backgroundPosition = `center calc(50% - ${pos}px)`;
 }
 
+function showMemoTextarea() {
+	isEditingMemo = true;
+	nextTick(() => {
+		memoTextareaEl?.focus();
+	});
+}
+
+function adjustMemoTextarea() {
+	if (!memoTextareaEl) return;
+	memoTextareaEl.style.height = '0px';
+	memoTextareaEl.style.height = `${memoTextareaEl.scrollHeight}px`;
+}
+
+async function updateMemo() {
+	await api('users/update-memo', {
+		memo: memoDraft,
+		userId: props.user.id,
+	});
+	isEditingMemo = false;
+}
+
+watch([props.user], () => {
+	memoDraft = props.user.memo;
+});
+
 onMounted(() => {
 	window.requestAnimationFrame(parallaxLoop);
 	narrow = rootEl!.clientWidth < 1000;
@@ -208,6 +295,9 @@ onMounted(() => {
 			});
 		}
 	}
+	nextTick(() => {
+		adjustMemoTextarea();
+	});
 });
 
 onUnmounted(() => {
@@ -323,6 +413,16 @@ onUnmounted(() => {
 									font-weight: bold;
 								}
 							}
+
+							> .add-note-button {
+								background: rgba(0, 0, 0, 0.2);
+								color: #fff;
+								-webkit-backdrop-filter: var(--blur, blur(8px));
+								backdrop-filter: var(--blur, blur(8px));
+								border-radius: 24px;
+								padding: 4px 8px;
+								font-size: 80%;
+							}
 						}
 					}
 				}
@@ -366,6 +466,43 @@ onUnmounted(() => {
 						border-radius: 999px;
 						margin-right: 4px;
 						padding: 3px 8px;
+					}
+				}
+
+				> .moderationNote {
+					margin: 12px 24px 0 154px;
+				}
+
+				> .memo {
+					margin: 12px 24px 0 154px;
+					background: transparent;
+					color: var(--fg);
+					border: 1px solid var(--divider);
+					border-radius: 8px;
+					padding: 8px;
+					line-height: 0;
+
+					> .heading {
+						text-align: left;
+						color: var(--fgTransparent);
+						line-height: 1.5;
+						font-size: 85%;
+					}
+
+					textarea {
+						margin: 0;
+						padding: 0;
+						resize: none;
+						border: none;
+						outline: none;
+						width: 100%;
+						height: auto;
+						min-height: 0;
+						line-height: 1.5;
+						color: var(--fg);
+						overflow: hidden;
+						background: transparent;
+						font-family: inherit;
 					}
 				}
 
@@ -504,6 +641,14 @@ onUnmounted(() => {
 					justify-content: center;
 				}
 
+				> .moderationNote {
+					margin: 16px 16px 0 16px;
+				}
+
+				> .memo {
+					margin: 16px 16px 0 16px;
+				}
+
 				> .description {
 					padding: 16px;
 					text-align: center;
@@ -531,7 +676,12 @@ onUnmounted(() => {
 <style lang="scss" module>
 .tl {
 	background: var(--bg);
-    border-radius: var(--radius);
-    overflow: clip;
+	border-radius: var(--radius);
+	overflow: clip;
+}
+
+.verifiedLink {
+	margin-left: 4px;
+	color: var(--success);
 }
 </style>
